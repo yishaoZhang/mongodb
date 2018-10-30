@@ -191,3 +191,150 @@ const client = new MongoClient(url);
       }
     })();
     ```
+## bulk write operations ##
+> following code uses ordered bulk api
+> the write commands are single operation type
+> that means they can only do insert/update/remove
+> the same insert/update/remove function execute multiple will be combined and excute one.
+```
+// same command type excuted multiply, will combined
+insert {a:1}
+insert {a:2}
+insert {a:3}
+update {a:1} to {a:1, b:1}
+Remove {b:1}
+// the number of write commands issued by the driver will be:
+insert Command with {a:1}, {a:2},{a:3}
+update Command {a:1} to {a:1,b:1}
+Remove Command with {b:1}
+```
+```
+const MongoClient = require('mongodb').MongoClient;
+const assert = require('assert');
+const url = 'mongodb://localhost:27017';
+const dbName = 'myproject';
+const client = new MongoClient(url);
+(function() {
+  try {
+    await client.connect();
+    const db = client.db(dbName);
+    // get the collection
+    const col = db.collection('bulkops');
+    const bulk = col.initializeOrderedBulkOp();
+    for(let i = 0; i < 10; i++) {
+      bulk.insert({a: i});
+    }
+    for(let i = 0; i < 10; i++) {
+      bulk.find({b:i}).upsert().updateOne({b:1});
+    }
+    bulk.find({b:1}).deleteOne();
+    // execute the bulk with a journal write concern??
+    const result = await bulk.execute();
+    client.close();
+  } catch (err) {
+    console.log(err.stack);
+  }
+})()
+```
+
+## read method ##
+> Once the query is ready to be executed you can retrieve the documents using the next, each and to Array methods
+> if the query returns many documents it's preferable to use the next or each methods
++ .toArray()
+  + 内存中将创建一个容器
+  + 结果数量巨大不适合，using a lot of memory
+
+```
+const MongoClient = require('mongodb').MongoClient;
+const assert = require('assert');
+const url = 'mongodb://localhost:27017';
+const dbName = 'myproject';
+const client = new MongoClient(url);
+(async function() {
+  try {
+    await client.connect();
+    const db = client.db(dbName);
+    const col = db.collection('find');
+    const r = await col.insertMany([{a:1},{a:1},{a:1}]);
+    assert.equal(3, r.insertedCount);
+    
+    // get two documents that match the query
+    const doc = await col.find({a:1}).limit(2).toArray();
+    assert.equal(2, doc.length)
+
+    // close collection
+    client.close();
+  } catch (err) {
+    console.log(err.stack)
+  }
+})();
+```
+```
+collection.find({}).project({a:1})  // create a projection of field a 
+collection.find({}).skip(1).limit(10)
+collection.find({}).batchSize(5)  // set batchsize on cursor to 5
+collection.find({}).filter({a:1})
+collection.find({}).comment('add a comment') // add a comment to the query, allowing to correlate queries
+collection.find({}).addCursorFlag('tailable', true) // set cursor as tailable
+collection.find({}).addQueryModifier('$orderby', {a:1}) // set $orderby {a:1}
+collection.find({}).max(10); // set the cursor max
+collection.find({}).maxTimeMS(1000) // set the cursor maxTimeMS
+collection.find({}).min(10) // set the cursor min
+collection.find({}).returnKey(10)
+collection.find({}).setReadPreference(ReadPreference.PRIMAY)
+collection.find({}).showRecordId(true)
+collection.find({}).sort([['a':1]]) // 命令行使用 collection.find({}).sort({a:1})
+collection.find({}).hint('a_1') // set the cursor hint
+// all options are chainable, so can combine settings in the following way:
+collection.find({}).maxTimeMS(1000).skip(1).toArray()
+```
++ .next()
+```
+const MongoClient = require('mongodb').MongoClient;
+const assert = require('assert');
+const url = 'mongodb://localhost:27017';
+const dbName = 'myproject';
+const client = new MongoClient(url);
+(function(){
+  try {
+    await client.connect();
+    const db = client.db(dbName);
+    const col = db.collection('find');
+    const r = await col.insertMany([{a:1},{a:1},{a:1}]);
+    assert.equal(3, r.insertedCount);
+    // get the cursor
+    const cursor = col.find({a:1}).limit(2);
+
+    // iterate over the cursor
+    while(await cursor.hasNext()) { // 这个await 用的相当之不错
+      const doc = await cursor.next();
+      console.dir(doc);
+    }
+    client.close();
+  } catch (err) {
+    console.log(err.stack);
+  }
+})();
+```
++ .each()
+```
+const MongoClient = require('mongodb').MongoClient;
+const assert = require('assert');
+const url = 'mongodb://localhost:27017';
+const dbName = 'myproject';
+const client = new MongoClient(url);
+client.connect(function(err, client) {
+  const db = client.db(dbName);
+  const col = db.collection('find');
+  col.insertMany([{a:1},{a:1},{a:1}],function(err,r){
+    col.find({a:1}).limit(2).each(function(err,doc){
+      if(doc) {
+        // get the doc
+      } else {
+        client.close();
+        return false;
+      }
+    })
+  })
+})
+```
